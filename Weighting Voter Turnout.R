@@ -3,7 +3,7 @@ library(survey)
 library(haven)
 
 # adding mortality data
-setwd("C:/Users/joema/OneDrive/Year 3/Dissertation/Gentrification Index/Understanding Society/UKDA-6614-stata/stata/stata13_se/ukhls")
+setwd("C:/Users/xxxxxx/stata/stata13_se/ukhls")
 
 # we use the weighting for wave g because mortality weighting only go up to wave 9
 
