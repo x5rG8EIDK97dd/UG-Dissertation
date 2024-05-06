@@ -1,4 +1,4 @@
-setwd("C:/Users/joema/OneDrive/Year 3/Dissertation/Gentrification Index")
+setwd("C:/Users/xxxxx....")
 
 # loading in libraries
 packages <- c("devtools", "haven", "tidyverse", "sp", "rgdal", "rgeos", 
