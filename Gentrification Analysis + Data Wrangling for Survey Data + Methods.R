@@ -1013,7 +1013,7 @@ merged_filtered <- read.csv("merged_filtered.csv")
 # Now merge gentrification data and run fixed effects regression, taking complex survey design into account
 
 # Creating a new gent variable in merged_filtered, 
-# merging gent2011 values to where wave = 3, gent2015 to where wave =6 and gent2018 to where gent = 9
+# merging gent_wave3 values to where wave = 3, gent_wave6 to where wave =6 and gent_wave9 to where gent = 9
 
 g$lsoa11 <- as.character(g$lsoa11)
 merged_filtered$lsoa11 <- as.character(merged_filtered$lsoa11)
@@ -1667,7 +1667,7 @@ dev.off()
 
 
 
-# now create a dataframe for responses per borough and wave
+# now create a dataframe for responses per borough and wave and examine descriptive statistics
 
 summary_authority <- subset_mf %>%
   group_by(Local.authority.name, wave) %>%
