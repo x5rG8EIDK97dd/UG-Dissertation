@@ -1,4 +1,4 @@
-setwd("xxxxxx")
+setwd("xxxxx")
 
 # loading in libraries
 packages <- c("devtools", "haven", "tidyverse", "sp", "rgdal", "rgeos", 
@@ -11,7 +11,11 @@ packages <- c("devtools", "haven", "tidyverse", "sp", "rgdal", "rgeos",
 lapply(packages, library, character.only = TRUE)
 rm(packages)
 
+
 # loading in indices of deprivation data
+
+m7 <- read.csv("imd_eng_2007_LSOA11.csv") %>%
+  select("LSOA11CD", "LA.CODE", "LA.NAME","IMD2007")
 
 m10 <- read.csv("imd2010englsoa2011.csv")
 
@@ -27,6 +31,20 @@ LSOA11NM <- c(m15$LSOA.name)
 
 # subsetting non-London dataset to London LSOAs
 
+m7 <- m7[m7$LSOA11CD %in% LSOA11CD, ]
+
+m7 %>%
+  count(LSOA11CD) %>%
+  filter(n > 1)
+
+# average cases where we have duplicates
+m7 <- m7 %>%
+  group_by(LSOA11CD) %>%
+  summarise(IMD2007 = mean(IMD2007, na.rm = TRUE), .groups = "drop")
+
+# here we have duplicates due to a conversion from 2001 to 2011 LSOAs
+# these will be averaged
+
 m10 <- m10[m10$LSOA11CD %in% LSOA11CD,]
 
 # Standardising column names for IMD score
@@ -41,41 +59,39 @@ m15$LSOA11CD <- m15$LSOA.code.2011
 
 m19$LSOA11CD <- m19$LSOA.code.2011
 
-m <- merge(x = m10, y = m15, by = "LSOA11CD")
+m <- merge(x = m10, y = m7, by = "LSOA11CD", all.x = TRUE)
+
+m <- merge(x = m, y = m15, by = "LSOA11CD")
 
 m <- merge(x = m, y = m19, by = "LSOA11CD")
 
-m <- m[ , c('LSOA11CD','LSOA11NM','IMD2010','IMD2015','IMD2019')]
+m <- m[ , c('LSOA11CD','LSOA11NM','IMD2007','IMD2010','IMD2015','IMD2019')]
 
 # removing temporary datasets
-rm(m10,m15,m19)
+rm(m7,m10,m15,m19)
 
 # Now using polynomial interpolation to add values for each year.
 
 for (i in 1:4835) {
-  scores <- c(m$IMD2010[i], m$IMD2015[i], m$IMD2019[i])
-  spline_results <- spline(c(2010, 2015, 2019), scores, xout = 2011:2018)$y
-  m[i, paste("IMD", 2011:2018, sep = "")] <- spline_results
+  scores <- c(m$IMD2007[i], m$IMD2010[i], m$IMD2015[i], m$IMD2019[i])
+  spline_results <- spline(c(2007, 2010, 2015, 2019), scores, xout = 2008:2018)$y
+  m[i, paste("IMD", 2008:2018, sep = "")] <- spline_results
 }
 
+# sort columns to year ascending order
+non_year_cols <- c("LSOA11CD", "LSOA11NM") 
+imd_cols <- grep("^IMD\\d{4}$", names(m), value = TRUE)
+imd_cols_sorted <- imd_cols[order(as.integer(gsub("IMD", "", imd_cols)))]
+m <- m[, c(non_year_cols, imd_cols_sorted)]
 
-# Shifting columns to the right order
-new_order <- c(1:3, 6:9, 4, 10:12, 5)
-
-# Reorder the dataframe columns
-m <- m[, new_order]
-
-
-# removing temporary data
-
-rm(i,new_order,scores,spline_results)
+# for all NA values of IMD2007 fill with IMD2010
+m$IMD2007[is.na(m$IMD2007)] <- m$IMD2010[is.na(m$IMD2007)]
 
 # writing as a csv for easy loading
 
 write.csv(m, "m.csv", row.names = FALSE)
 
 m <- read.csv("m.csv")
-
 
 # Loading the data for population churn based for each year in the analysis
 years <- 2009:2018
@@ -93,7 +109,7 @@ for (year in years) {
   if (is.null(wide_data)) {
     wide_data <- df
   } else {
-  
+    
     wide_data <- merge(wide_data, df, by = "area", all = TRUE)
   }
 }
@@ -116,68 +132,9 @@ ch <- read.csv("ch.csv")
 
 rm(base_path,file_path,i,new_order,scores,spline_results,year,years,df,data_frames)
 
-# Organising housing data
+# Loading in housing data from the imputation script
 
-hp <- read.csv("HPSSA Dataset 46 - Median price paid for residential properties by LSOA.csv")
-hpborough <- read.csv("land-registry-house-prices-borough.csv")
-
-# subsetting house price data for London LSOAs
-
-hp <- hp[hp$LSOA.code %in% LSOA11CD,]
-
-LACD <- c(hp$Local.authority.code)
-LANM <- c(hp$Local.authority.name)
-
-class(hp$Year.ending.Dec.1995) # this tells us that the numbers in this dataset are actually non-numeric characters
-
-# This is likely due to the use of commas
-
-hp <- data.frame(lapply(hp, function(x) {
-  if(is.character(x) | is.factor(x)) {
-    gsub(",", "", x)
-  } else {
-    x
-  }
-}))
-
-# converting all : values to NA 
-
-hp <- hp %>%
-  mutate_all(~na_if(.x, ":"))
-
-hp[, 5:ncol(hp)] <- lapply(hp[, 5:ncol(hp)], as.numeric)
-
-
-# turning all values in hp to numeric values
-
-hp[, 5:ncol(hp)] <- lapply(hp[, 5:ncol(hp)], function(x) as.numeric(as.character(x)))
-
-# 4.22% of the house price data is made up of NA value
-
-# subsetting to correspond to Understanding Society wave timelines AND years ending dec 2009-2019
-
-hp <- hp[, c(1:4, 57, 61, 65, 69, 73, 75, 77, 81, 85, 87, 89, 93, 97, 99, 101 )]
-
-
-# Using missforest optimised for imputation
-
-hp_sub <- hp[, -c(1:4)]
-
-sum(is.na(hp_sub))/(4835*15)
-
-registerDoParallel(cores = 14)
-
-hp_forest <- missForest(hp_sub, parallelize = 'forests')
-
-######
-
-hp_forest1 <- hp_forest$ximp
-
-hp[, -c(1:4)] <- hp_forest1
-
-write.csv(hp, file = "hp_forest.csv", row.names = FALSE)
-
-hp <- read.csv("hp_forest.csv")
+hp <- read.csv("hp_advanced_imputation_contiguous.csv")
 
 # Adding mean of all median house sale prices in each LSOA across the borough per year
 
@@ -203,8 +160,7 @@ for (year in years_of_interest) {
 }
 
 # removing unneeded imputation columns
-
-hp <- hp[ , c(1:19,24:38)]
+#hp <- hp[ , c(1:19,24:38)]
 
 write.csv(hp, "hp.csv", row.names = FALSE)
 
@@ -267,20 +223,20 @@ e <- read.csv("e.csv")
 
 names(ch)[names(ch) == "area"] <- "lsoa11"
 
-names(hp)[names(hp) == "LSOA.code"] <- "lsoa11"
+names(hp)[names(hp) == "LSOA11CD"] <- "lsoa11"
 
 names(m)[names(m) == "LSOA11CD"] <- "lsoa11"
 
 # now merging all the important data to make sure all data are in the right columns
 rm(g)
 g = merge(e, ch, by = "lsoa11")
+
+hp$lsoa11 <- hp$LSOA.code
 g = merge(g, hp, by = "lsoa11")
 g = merge(g, m, by = "lsoa11")
 
 # creating gentrification score to cross reference with the same methodoloy
 # used in the runnymede report
-
-# testing relationship between other variables and % change in nw
 
 g$change_nw <- ((g$nw2016 - g$nw2010) / g$nw2010)
 g$change_churn <- (g$chn2016_2010)
@@ -311,19 +267,8 @@ g$gent2010_2016 <- ifelse(
 )
 
 sum(is.na(g$gent2010_2016))
-# highly significant
 
-m1 <- lm(change_nw ~ change_churn + change_dep + change_house, data =  g)
-summary(m1)
 
-vif(m1)
-
-cor.test(g$change_churn, g$change_nw, method = "pearson")
-
-# so yes, increase in gentrification index without race leads to a decrease
-# in nonwhite population. There is also a statistically significant relationship
-# between churn (negative, so as churn increases, proportion of nonwhites decrease),
-# and deprivation, so as deprivation increase, proportion of nonwhites increase.
 
 # creating gentrification scores for waves 3, 6 and 9 in Understanding Society
 
@@ -337,6 +282,7 @@ g$change_dep <- ((g$IMD2013 - g$IMD2010) / g$IMD2010)
 g$change_house <- (((g$Year.ending.Jun.2013 / g$Mean_Year.ending.Jun.2013) - 
                       (g$Year.ending.Dec.2008 / g$Mean_Year.ending.Dec.2008)) / 
                      (g$Year.ending.Dec.2008 / g$Mean_Year.ending.Dec.2008))
+
 
 
 # checking for and truncating house price ethnic change values greater than one
@@ -391,81 +337,13 @@ g$gent_wave9_m <- 0.5*g$change_churn - 0.25*g$change_nw +
   0.125*g$change_house - 0.125*g$change_dep + 0.25
 
 
-# secondly treating gentrification as a composite score
-
-# wave 3
-
-g$change_nw <- ((g$nw2013 - g$nw2009) / g$nw2009)
-g$change_churn <- (g$chn2013_2009)
-g$change_dep <- ((g$IMD2013 - g$IMD2010) / g$IMD2010)
-g$change_house <- (((g$Year.ending.Jun.2013 / g$Mean_Year.ending.Jun.2013) - 
-                      (g$Year.ending.Dec.2008 / g$Mean_Year.ending.Dec.2008)) / 
-                     (g$Year.ending.Dec.2008 / g$Mean_Year.ending.Dec.2008))
-
-
-sum(g$change_house >= 1)
-
-g$change_house <- ifelse(g$change_house >=1, 1, g$change_house)
-
-sum(g$change_nw > 1)
-
-g$change_nw <- ifelse(g$change_nw >=1, 1, g$change_nw)
-
-g$gent_wave3 <- 0.5*g$change_churn - 0.25*g$change_nw +
-  0.125*g$change_house - 0.125*g$change_dep + 0.25
-
-# wave 6
-g$change_nw <- ((g$nw2016 - g$nw2009) / g$nw2009)
-g$change_churn <- (g$chn2016_2009)
-g$change_dep <- ((g$IMD2016 - g$IMD2010) / g$IMD2010)
-g$change_house <- (((g$Year.ending.Jun.2016 / g$Mean_Year.ending.Jun.2016) - 
-                      (g$Year.ending.Dec.2008 / g$Mean_Year.ending.Dec.2008)) / 
-                     (g$Year.ending.Dec.2008 / g$Mean_Year.ending.Dec.2008))
-
-
-sum(g$change_house >= 1)
-
-g$change_house <- ifelse(g$change_house >=1, 1, g$change_house)
-
-sum(g$change_nw > 1)
-
-g$change_nw <- ifelse(g$change_nw >=1, 1, g$change_nw)
-
-g$gent_wave6 <- 0.5*g$change_churn - 0.25*g$change_nw +
-  0.125*g$change_house - 0.125*g$change_dep + 0.25
-
-# wave 9
-
-g$change_nw <- ((g$nw2019 - g$nw2009) / g$nw2009)
-g$change_churn <- (g$chn2019_2009)
-g$change_dep <- ((g$IMD2019 - g$IMD2010) / g$IMD2010)
-g$change_house <- (((g$Year.ending.Jun.2019 / g$Mean_Year.ending.Jun.2019) - 
-                      (g$Year.ending.Dec.2008 / g$Mean_Year.ending.Dec.2008)) / 
-                     (g$Year.ending.Dec.2008 / g$Mean_Year.ending.Dec.2008))
-
-
-sum(g$change_house >= 1)
-
-g$change_house <- ifelse(g$change_house >=1, 1, g$change_house)
-
-sum(g$change_nw > 1)
-
-g$change_nw <- ifelse(g$change_nw >=1, 1, g$change_nw)
-
-g$gent_wave9 <- 0.5*g$change_churn - 0.25*g$change_nw +
-  0.125*g$change_house - 0.125*g$change_dep + 0.25
-
-
-
-
 # writing g to csv for easy loading
 
-write.csv(g, "g.csv", row.names = FALSE)
+write.csv(g, "g_v2.csv", row.names = FALSE)
 
-g <- read.csv("g.csv") %>%
+g <- read.csv("g_v2.csv") %>%
   select("lsoa11","LSOA.name","Local.authority.code","Local.authority.name",
-         "gent2010_2016", "gent_wave3", "gent_wave6", "gent_wave9", 
-         "gent_wave3_m", "gent_wave6_m", "gent_wave9_m") 
+         "gent2010_2016", "gent_wave3_m", "gent_wave6_m", "gent_wave9_m") 
 
 rm(e,hp,ch,m)
 
@@ -476,11 +354,12 @@ original.GI$lsoa11 <- original.GI$LSOACD
 
 g <- merge(g, original.GI, by = "lsoa11")
 
+
+
 # examining 10 most and least gentrified gentrified areas from 2010-2016
 
 g[order(g$gent2010_2016, decreasing = TRUE),][1:10, ]
 g[order(g$gent2010_2016, decreasing = FALSE), ][1:10, ]
-
 
 # examining original index
 
@@ -512,7 +391,7 @@ p_values <- numeric()
 
 for (i in 1:33) {
   code <- sprintf("E090000%02d", i)
-  data_subset <- g$gent2010_2016[g$Local.authority.code == code]
+  data_subset <- g$gent_wave9[g$Local.authority.code == code]
   la_name <- unique(g$Local.authority.name[g$Local.authority.code == code])
   test_result <- shapiro.test(data_subset)
   p_values[i - 8] <- test_result$p.value
@@ -626,35 +505,15 @@ plot(g$gent2010_2016, g$gent, main = "Gentrification Index Comparison",
 
 abline(lm(g$gent ~ g$gent2010_2016), col = "blue")
 dev.off()
-# Plotting population churn and ethnic change
-
-plot(g$change_churn, g$change_nw, main = "Gentrification Index Comparison",
-     xlab = "Population Churn", ylab = "Ethnic change",
-     pch = 18, frame = FALSE)
-
-y <- g$nw_change_2016_2010
-x <- g$chn2016_2010
-
-abline(lm(change_churn ~ change_nw, data=g), col = "blue")
-
-# kendalls t coefficient test comparing churn and change in nonwhite pop
-?cor.test
-cor.test(x, y, method = "kendall")
-
-sum(is.na(g$nw_change_2016_2010))
-sum(is.na(g$chn2016_2010))
-
-ggplot(data = g) + 
-  geom_smooth(mapping = aes(x = chn2016_2010, y = nw_change_2016_2010))
-
-#####
 
 # constructing the spatial weights index and exploring spatial results
 
-
-# creating an object that identifies "neighbouring" LSOAs
 neighbours <- poly2nb(OA.gent, queen = TRUE)
-neighbours
+
+# Add the LSOA itself as a neighbor
+for (i in 1:length(neighbours)) {
+  neighbours[[i]] <- c(neighbours[[i]], i)
+}
 
 # testing for spatial autocorrelation
 listw <- nb2listw(neighbours, style="W")
@@ -686,7 +545,7 @@ g$Lag <- Lag
 moran.test(Gentrification, listw, randomisation = TRUE)
 
 # this suggests strong positive spatial autocorrelation throughout greater London
-
+# as expected with a spatially dependent metric
 
 # Using a getis-ord approach to illustrate clustering
 
@@ -694,7 +553,10 @@ Gentrification <- OA.gent$gent_wave9
 
 # creating centroid and joins neighbours within 0 and 2500 units
 
-nb <- dnearneigh(coordinates(OA.gent),0,2500)
+# unused test of a different function
+#nb <- dnearneigh(coordinates(OA.gent),0,2500)
+
+nb <- poly2nb(OA.gent, queen = TRUE) 
 
 # creates listw
 
@@ -707,34 +569,12 @@ local_g_sp<- OA.gent
 
 local_g_sp@data <- cbind(OA.gent@data, as.matrix(local_g))
 names(local_g_sp)
-names(local_g_sp)[33] <- "gstat"
-
-# map the results
-pdf("gentrification_clustering_2010_2019.pdf")
-
-tm_shape(local_g_sp) + 
-  tm_fill("gstat", palette = "-RdBu", style = "cont", title = "G statistic", midpoint = NA) + 
-  tm_layout(frame = FALSE,
-            outer.margins = c(0.02, 0.02, 0.1, 0.02), # Adjust top margin to prevent overlap
-            title.position = c("center", "top"),
-            legend.outside = TRUE,
-            legend.position = c("left", "bottom"))  +
-  tmap_options(max.categories = 4835)
-
-dev.off()
 
 
-# creating lagged results for each wave
+##
 
-# for gentrification from beginning of measurement
+library(tmap)
 
-Lag_wave3 <- lag.listw(nb2listw(neighbours, style = "W"), OA.gent@data$gent_wave3)
-Lag_wave6 <- lag.listw(nb2listw(neighbours, style = "W"), OA.gent@data$gent_wave6)
-Lag_wave9 <- lag.listw(nb2listw(neighbours, style = "W"), OA.gent@data$gent_wave9)
-
-g$Lag_wave3 <- Lag_wave3
-g$Lag_wave6 <- Lag_wave6
-g$Lag_wave9 <- Lag_wave9
 
 # for gentrification within each wave
 
@@ -748,43 +588,42 @@ g$Lag_wave9_m <- Lag_wave9_m
 
 # test descriptive stats for new lagged scores
 
-g[order(g$Lag_wave9, decreasing = TRUE), ][1:10, ]
-g[order(g$Lag_wave9, decreasing = FALSE), ][1:10, ]
+g[order(g$Lag_wave9_m, decreasing = TRUE), ][1:10, ]
+g[order(g$Lag_wave9_m, decreasing = FALSE), ][1:10, ]
 
 # visualising spatial gent
 
 OA.gent <- merge(Output.Areas, g, by.x = "LSOA11CD", by.y = "lsoa11")
 
+# Map the results
+pdf("space_weights_wave9.pdf")
 
-map <- tm_shape(OA.gent) +
-  tm_fill("Lag_wave9",
-          palette = "-magma",
-          midpoint = NA,
-          style = "cont",
-          title = "Gentrification Index",
-          colorNA = "grey",
-          breaks = seq(0.4, 0.8, length.out = 5)) +
+map_t <- tm_shape(OA.gent) + 
+  tm_fill("Lag_wave9_m", palette = "-magma", style = "cont", title = "Spatial Lag (Wave 9)", midpoint = NA,
+          breaks = seq(0.4, 0.8, length.out = 5)) + 
   tm_layout(frame = FALSE,
             outer.margins = c(0.02, 0.02, 0.1, 0.02), # Adjust top margin to prevent overlap
             title.position = c("center", "top"),
             legend.outside = TRUE,
-            legend.position = c("left", "bottom")) +
+            legend.position = c("left", "bottom"))  +
   tm_layout("Spatially lagged gentrification",
             legend.title.size = 1,
             legend.text.size = 0.6,
             legend.bg.color = NA,
-            legend.bg.alpha = 1)
+            legend.bg.alpha = 1) +
+  tmap_options(max.categories = 4835)
 
-print(map)
+print(map_t)
 
-gwlag <- g[, -c(12,13)]
+dev.off()
 
-write.csv(gwlag, file = "gwlag.csv", row.names = FALSE)
-g <- read.csv("gwlag.csv")
+write.csv(g, "df_gent_after_spatial_lags.csv")
+
 
 #####
 
 # Loading and cleaning understanding society data
+LSOA11CD <- g$lsoa11
 
 setwd("xxxxx")
 
@@ -866,29 +705,47 @@ setwd("xxxxxx")
 c_indresp <- read_dta("c_indresp.dta") %>%
   select("c_hidp","c_voteintent","c_pno","pidp","c_dvage","c_psu","c_strata", 
          "c_vote3", "c_distmov_dv", "c_hiqual_dv", "c_jbstat", "c_sex_dv", 
-         "c_basrate", "c_ethn_dv", "c_urban_dv", "c_fimnsben_dv", "c_nbrsnci_dv") %>%
+         "c_basrate", "c_ethn_dv", "c_urban_dv", "c_fimnsben_dv", "c_nbrsnci_dv",
+         "c_mvyr", "c_intdaty_dv") %>%
   left_join(
     read_dta("c_hhresp.dta", col_select = c("c_tenure_dv", "c_hidp","c_hhsize","c_nchoecd_dv", "c_fihhmnnet1_dv")),
     by = "c_hidp"
   ) 
-  
+
+sum(c_indresp$c_intdaty_dv > 0 &  c_indresp$c_mvyr > 0)
+
+d_indresp <- read_dta("d_indresp.dta") %>%
+  select("pidp", "d_distmov_dv")
+
+e_indresp <- read_dta("e_indresp.dta") %>%
+  select("pidp", "e_distmov_dv")
+
 f_indresp <- read_dta("f_indresp.dta") %>%
   select("f_hidp","f_voteintent","f_pno","pidp","f_dvage","f_psu","f_strata", 
          "f_vote3", "f_distmov_dv", "f_hiqual_dv", "f_jbstat", "f_sex_dv", 
-         "f_basrate", "f_ethn_dv", "f_urban_dv", "f_fimnsben_dv", "f_nbrsnci_dv") %>%
+         "f_basrate", "f_ethn_dv", "f_urban_dv", "f_fimnsben_dv", "f_nbrsnci_dv", 
+         "f_mvyr", "f_intdaty_dv") %>%
   left_join(
     read_dta("f_hhresp.dta", col_select = c("f_tenure_dv", "f_hidp", "f_hhsize","f_nchoecd_dv", "f_fihhmnnet1_dv")),
     by = "f_hidp"
   ) 
 
+g_indresp <- read_dta("g_indresp.dta") %>%
+  select("pidp", "g_distmov_dv")
+
+h_indresp <- read_dta("h_indresp.dta") %>%
+  select("pidp", "h_distmov_dv")
+
 i_indresp <- read_dta("i_indresp.dta")  %>%
   select("i_hidp","i_voteintent","i_pno","pidp","i_dvage","i_psu","i_strata", 
          "i_vote3", "i_distmov_dv", "i_hiqual_dv", "i_jbstat", "i_sex_dv", 
-         "i_basrate", "i_ethn_dv", "i_urban_dv", "i_fimnsben_dv", "i_nbrsnci_dv") %>%
+         "i_basrate", "i_ethn_dv", "i_urban_dv", "i_fimnsben_dv", "i_nbrsnci_dv", 
+         "i_mvyr", "i_intdaty_dv") %>%
   left_join(
     read_dta("i_hhresp.dta", col_select = c("i_tenure_dv", "i_hidp", "i_hhsize","i_nchoecd_dv", "i_fihhmnnet1_dv")),
     by = "i_hidp"
   ) 
+
 
 
 write.csv(c_indresp, "c_indresp.csv", row.names = FALSE)
@@ -969,7 +826,6 @@ long_filtered <- long[!is.na(long$mean_i_indscub_lw1), ]
 svy_long <- svydesign(id=~psu, strata=~strata,
                       weights=~mean_i_indscub_lw1, data=long)
 
-svymean(~voteintent, svy_long, na.rm=TRUE)
 table(long$voteintent)
 
 # dealing with strata with only a single PSU
@@ -1018,44 +874,104 @@ merged_filtered <- read.csv("merged_filtered.csv")
 g$lsoa11 <- as.character(g$lsoa11)
 merged_filtered$lsoa11 <- as.character(merged_filtered$lsoa11)
 
+g <- g %>% distinct(lsoa11, .keep_all = TRUE)
+
 merged_filtered <- merged_filtered %>%
   left_join(g, by = "lsoa11") %>%
   mutate(gent_data = case_when(
-    wave == 3 ~ gent_wave3,
-    wave == 6 ~ gent_wave6,
-    wave == 9 ~ gent_wave9,
-    TRUE ~ NA_real_ 
-  )) %>%
-  mutate(lag_data = case_when(
-    wave == 3 ~ Lag_wave3,
-    wave == 6 ~ Lag_wave6,
-    wave == 9 ~ Lag_wave9,
+    wave == 3 & !is.na(gent_wave3_m) ~ gent_wave3_m,
+    wave == 6 & !is.na(gent_wave6_m) ~ gent_wave6_m,
+    wave == 9 & !is.na(gent_wave9_m) ~ gent_wave9_m,
     TRUE ~ NA_real_
   )) %>%
-  mutate(gent_m_data = case_when(
-    wave == 3 ~ gent_wave3_m,
-    wave == 6 ~ gent_wave6_m,
-    wave == 9 ~ gent_wave9_m,
-    TRUE ~ NA_real_ 
-  )) %>%
   mutate(lag_m_data = case_when(
-    wave == 3 ~ Lag_wave3_m,
-    wave == 6 ~ Lag_wave6_m,
-    wave == 9 ~ Lag_wave9_m,
+    wave == 3 & !is.na(Lag_wave3_m) ~ Lag_wave3_m,
+    wave == 6 & !is.na(Lag_wave6_m) ~ Lag_wave6_m,
+    wave == 9 & !is.na(Lag_wave9_m) ~ Lag_wave9_m,
     TRUE ~ NA_real_
   )) %>%
   select(-c(gent_wave3, gent_wave6, gent_wave9, Lag_wave3, Lag_wave6, Lag_wave9,
             gent_wave3_m, gent_wave6_m, gent_wave9_m, Lag_wave3_m, Lag_wave6_m, Lag_wave9_m))
+
+#### creating a dataset for residency
+library(dplyr)
+library(tidyr)
+
+# Assign each dataset a wave number
+c_indresp$wave <- 3
+d_indresp$wave <- 4
+e_indresp$wave <- 5
+f_indresp$wave <- 6
+g_indresp$wave <- 7
+h_indresp$wave <- 8
+i_indresp$wave <- 9
+
+# Standardize column names to have a common "distmov_dv" column
+d_indresp <- d_indresp %>% rename(distmov_dv = d_distmov_dv)
+e_indresp <- e_indresp %>% rename(distmov_dv = e_distmov_dv)
+g_indresp <- g_indresp %>% rename(distmov_dv = g_distmov_dv)
+h_indresp <- h_indresp %>% rename(distmov_dv = h_distmov_dv)
+
+long_df <- bind_rows(c_indresp, d_indresp, e_indresp, f_indresp, g_indresp, h_indresp, i_indresp) %>%
+  select(pidp, wave, distmov_dv) %>%
+  arrange(pidp, wave)
+
+# ensure distmov_dv is numeric
+long_df <- long_df %>%
+  mutate(distmov_dv = as.numeric(distmov_dv))
+
+# subset long_df to include only pidp values present in merged_filtered
+long_df <- long_df %>%
+  filter(pidp %in% merged_filtered$pidp)
+
+# compute residency using a moving count
+long_df <- long_df %>%
+  group_by(pidp) %>%
+  mutate(residency = {
+    residency_vec <- numeric(n())  
+    count <- 0  
+    for (i in seq_along(residency_vec)) {
+      if (distmov_dv[i] > 0) {
+        count <- 0  
+      } else {
+        count <- count + 1  
+      }
+      residency_vec[i] <- count
+    }
+    residency_vec  
+  }) %>%
+  ungroup()
+
+# Filter only for waves 3, 6, and 9
+residency_df <- long_df %>%
+  filter(wave %in% c(3, 6, 9)) %>%
+  select(pidp, wave, residency)
+
+# View the final dataset
+print(residency_df)
+
+unique(residency_df$residency)
+
+
+##### join to merge filtered
+
+merged_filtered <- merged_filtered %>%
+  left_join(residency_df, by = c("pidp", "wave"))
+
+merged_filtered$residency
+
+####
+
 
 
 # creating equivalised income variable
 
 merged_filtered$hhead <- merged_filtered$hhsize-merged_filtered$nchoecd_dv-1
 merged_filtered$equiv <- 1+merged_filtered$hhead*0.5+merged_filtered$nchoecd_dv*0.3
-merged_filtered$eqhhnet <- merged_filtered$fihhmnnet1_dv/merged_filtered$equiv
-merged_filtered$eqhhnet <- merged_filtered$eqhhnet/1000
+merged_filtered$eqhhmnnet <- merged_filtered$fihhmnnet1_dv/merged_filtered$equiv
+merged_filtered$eqhhmnnet <- merged_filtered$eqhhmnnet/1000
 
-sum(is.na(merged_filtered$eqhhnet))
+sum(is.na(merged_filtered$eqhhmnnet))
 
 # coding NA values for job status
 merged_filtered$jbsat <- ifelse(merged_filtered$jbstat < 1, NA, merged_filtered$jbstat)
@@ -1064,17 +980,12 @@ merged_filtered$jbsat <- ifelse(merged_filtered$jbstat < 1, NA, merged_filtered$
 
 merged_filtered$hiqual_dv <- ifelse(merged_filtered$hiqual_dv < 0, NA, merged_filtered$hiqual_dv)
 
-# zero values for longstanding residency
-sum(merged_filtered$distmov_dv == -9)
-merged_filtered$distmov_dv <- ifelse(merged_filtered$distmov_dv %in% c(-8, -1), 0, merged_filtered$distmov_dv)
-sum(merged_filtered$distmov_dv == 0)
-
 # coding NA for sex variables
 
 merged_filtered$sex_dv <- ifelse(merged_filtered$sex_dv %in% c(-9, 0), NA, merged_filtered$sex_dv)
 
 # coding NA values for ethnicity
-
+merged_filtered$ethn_dv <- factor(merged_filtered$ethn_dv)
 merged_filtered$ethn_dv <- ifelse(merged_filtered$ethn_dv %in% c(-9), NA, merged_filtered$ethn_dv)
 
 # coding NA values for urban/rural
@@ -1088,12 +999,8 @@ merged_filtered$fimnsben_dv <- ifelse(merged_filtered$fimnsben_dv %in% c(-9), NA
 # coding NA for voting intention
 sum(merged_filtered$voteintent %in% c(-2,-9, -7))
 # -9, -7 and -2 values can be imputed in theory
-
 merged_filtered$voteintent <- ifelse(merged_filtered$voteintent %in% c(-9,-8,-7,-2,-1,11), NA, merged_filtered$voteintent)
 
-# coding NA values for vote3
-
-merged_filtered$vote3 <- ifelse(merged_filtered$vote3 %in% c(-9,-8,-7,-2,-1,94,95,96), NA, merged_filtered$vote3)
 
 #####
 
@@ -1101,7 +1008,6 @@ merged_filtered$vote3 <- ifelse(merged_filtered$vote3 %in% c(-9,-8,-7,-2,-1,94,9
 
 merged_filtered$tenure_dv <- ifelse(merged_filtered$tenure_dv == -9, NA, merged_filtered$tenure_dv)
 merged_filtered$ownership <- ifelse(merged_filtered$tenure_dv %in% c(1,2), 1, 0)
-
 
 # creating a term for the interaction between time and treatment
 
@@ -1118,8 +1024,6 @@ merged_filtered$longxgent <- merged_filtered$longstanding*merged_filtered$gent_d
 merged_filtered$jbstat <- factor(merged_filtered$jbstat)  
 merged_filtered$jbstat <- relevel(merged_filtered$jbstat, ref = "2")
 
-# Now we can actually perform fixed effects regression 
-
 
 # converting LHS independent variables to numeric
 
@@ -1135,31 +1039,73 @@ class(merged_filtered$lsoa11)
 
 merged_filtered$nw <- ifelse(merged_filtered$ethn_dv != 1, 1, 0)
 
-# making coefficients for benefits variable more sensible
+# making coefficients for benefits variable more readable
 
 merged_filtered$fimnsben_dv <- merged_filtered$fimnsben_dv/1000
 
-# conducting FE
+write.csv(merged_filtered, "merged_filtered_for_modelling.csv")
+merged_filtered <- read.csv("merged_filtered_for_modelling.csv")
 
+# determine whether missingness in outcome variable is at random
+
+# creating a binary variable indicating if voteintent is missing
+voteintent_m <- lm(voteintent ~ as.factor(jbstat) + eqhhmnnet + fimnsben_dv + as.factor(ethn_dv)+
+                     sex_dv + dvage, 
+                   data = merged_filtered)
+summary(voteintent_m)
+
+merged_filtered$missing_voteintent <- is.na(merged_filtered$voteintent)
+
+table_jbstat <- table(merged_filtered$missing_voteintent, merged_filtered$jbstat)
+chisq.test(table_jbstat)
+
+table_eqhht <- table(merged_filtered$missing_voteintent, merged_filtered$eqhhmnnet)
+chisq.test(table_eqhht)
+
+table_fimnsben <- table(merged_filtered$missing_voteintent, merged_filtered$fimnsben_dv)
+chisq.test(table_fimnsben)
+
+table_ethn_dv <- table(merged_filtered$missing_voteintent, merged_filtered$ethn_dv)
+chisq.test(table_ethn_dv)
+
+missing_model <- glm(missing_voteintent ~ as.factor(jbstat) + eqhhmnnet + fimnsben_dv + 
+                       as.factor(ethn_dv) + sex_dv + dvage, 
+                     data = merged_filtered, family = binomial)
+
+summary(missing_model)
+
+# creating a predictor matrix with zeros
+predictorMatrix <- matrix(0, nrow = ncol(merged_filtered), ncol = ncol(merged_filtered))
+colnames(predictorMatrix) <- rownames(predictorMatrix) <- colnames(merged_filtered)
+predictorMatrix["voteintent", c("ethn_dv", "dvage", "fimnsben_dv")] <- 1
+print(predictorMatrix)
+imp <- mice(merged_filtered, method = 'pmm', m = 5, maxit = 5, seed = 123, predictorMatrix = predictorMatrix)
+imputed_data <- complete(imp, 1)
+merged_filtered <- imputed_data
+
+# so missingness is not at random because the dummy for missingness has a positive and significant coefficient
+# when predicting voting intention i.e. there is a risk that we are using info from people who are more likely
+# to vote to impute these values.
 
 # conducting fixed effects with within-wave gentrification variable instead
 
 merged_filtered$longxgent_m <- merged_filtered$longstanding*merged_filtered$gent_m_data
 merged_filtered$time_treat_gent_m <- merged_filtered$gent_m_data*merged_filtered$wave
 
-model <- feols(voteintent ~ gent_m_data + longxgent_m + time_treat_gent_m | as.factor(wave) + as.factor(pidp), 
+merged_filtered$gentres <- merged_filtered$residency*merged_filtered$gent_m_data
+
+model <- feols(voteintent ~ gent_m_data + gentres + time_treat_gent_m | as.factor(wave) + as.factor(pidp), 
                data=merged_filtered,vcov = ~psu, weights = merged_filtered$mean_i_indscub_lw1)
 
 summary(model)
 
-plot_model(model)
-plot_models(model)
+vif(model)
+plot_model(model, type = c("resid"))
 tab_model(model)
 
+# sptially lagged gentrification data
 
-# within-wave lagged gentrification data
-
-merged_filtered$longxlag_m <- merged_filtered$longstanding*merged_filtered$lag_m_data
+merged_filtered$longxlag_m <- merged_filtered$residency*merged_filtered$lag_m_data
 merged_filtered$time_treat_lag_m <- merged_filtered$lag_m_data*merged_filtered$wave
 
 model <- feols(voteintent ~ lag_m_data + longxlag_m + time_treat_lag_m | as.factor(wave) + as.factor(pidp), 
@@ -1170,10 +1116,11 @@ summary(model)
 plot_model(model, type = "res")
 tab_model(model)
 
+
 # now accounting for time-varying sociodemographic characteristics
 
 model <- feols(voteintent ~  lag_m_data + longxlag_m + time_treat_lag_m  + 
-                 eqhhnet + dvage + as.factor(jbstat) + as.factor(hiqual_dv) +
+                 eqhhmnnet + dvage + as.factor(jbstat) + as.factor(hiqual_dv) +
                  fimnsben_dv + ownership
                | as.factor(wave) +as.factor(pidp), 
                data=merged_filtered, vcov = ~psu, weights = merged_filtered$mean_i_indscub_lw1)
@@ -1198,7 +1145,7 @@ subset_data <- merged_filtered %>%
   filter(pidp %in% complete_pidps)
 
 model <- feols(voteintent ~ lag_m_data + longxlag_m + time_treat_lag_m  + dvage + 
-                 eqhhnet + as.factor(jbstat) + as.factor(hiqual_dv) +
+                 eqhhmnnet + as.factor(jbstat) + as.factor(hiqual_dv) +
                  fimnsben_dv + ownership
                | as.factor(wave) +as.factor(pidp), 
                data=subset_data,vcov = ~psu, weights = subset_data$mean_i_indscub_lw1)
@@ -1219,102 +1166,61 @@ merged_filtered <- merged_filtered %>%
 merged_filtered$longxplacebo_m <- merged_filtered$placebo_m*merged_filtered$longstanding
 merged_filtered$time_treat_placebo_m <- merged_filtered$placebo_m*merged_filtered$wave
 
+# simple model
+
+model <- feols(voteintent ~ placebo_m + longxplacebo_m + time_treat_placebo_m | as.factor(wave) + as.factor(pidp),
+               data=merged_filtered,vcov = ~psu, weights = merged_filtered$mean_i_indscub_lw1)
+summary(model)
+
+# adding sociodemographics
+
 model <- feols(voteintent ~ placebo_m + longxplacebo_m + time_treat_placebo_m +
-                 eqhhnet + dvage + as.factor(hiqual_dv) + as.factor(jbstat) +
+                 eqhhmnnet + dvage + as.factor(hiqual_dv) + as.factor(jbstat) +
                  ownership + fimnsben_dv| as.factor(wave) + as.factor(pidp), 
                data=merged_filtered,vcov = ~psu, weights = merged_filtered$mean_i_indscub_lw1)
 
 summary(model)
 
-# testing composite gentrification measure
-
-# simple model for gentrification, time treatment, interaction between longstanding
-# and gentrification & longstanding residency
-
-model <- feols(voteintent ~ gent_data + longxgent + time_treat| as.factor(wave) + 
-                 as.factor(pidp), 
-               data=merged_filtered, cluster = "psu", weights = merged_filtered$mean_i_indscub_lw1)
-
-summary(model)
-
-plot_model(model)
-plot_models(model)
-tab_model(model)
-
-# simple model for cumulative lagged score
-
-merged_filtered$longxlag <- merged_filtered$lag_data*merged_filtered$longstanding
-merged_filtered$time_treat_lag <- merged_filtered$lag_data*merged_filtered$wave
-
-model <- feols(voteintent ~ lag_data + longxlag + time_treat_lag| as.factor(wave) + as.factor(pidp), 
-               data=merged_filtered,cluster = "psu", weights = merged_filtered$mean_i_indscub_lw1)
-
-summary(model)
-
-# accounting for demographic characteristics: age, employment, education and benefits income
-
-model <- feols(voteintent ~ lag_data + longxlag + time_treat_lag  + dvage + 
-                 eqhhnet + as.factor(jbstat) + as.factor(hiqual_dv) +
-                 fimnsben_dv + ownership|  as.factor(wave) + as.factor(pidp), 
-               data=merged_filtered,cluster = "psu", weights = merged_filtered$mean_i_indscub_lw1)
-
-summary(model)
-vif(model)
-
-# balanced panel for cumulative gentrification
-
-complete_pidps <- merged_filtered %>%
-  group_by(pidp) %>%
-  summarise(all_waves_present = all(unique(merged_filtered$wave) %in% wave)) %>%
-  filter(all_waves_present) %>%
-  pull(pidp)  
-
-subset_data <- merged_filtered %>%
-  filter(pidp %in% complete_pidps)
-
-model <- feols(voteintent ~ lag_data + longxlag  + time_treat_lag + dvage + 
-                 eqhhnet  + as.factor(hiqual_dv) + as.factor(jbstat) +
-                 ownership + fimnsben_dv
-               | as.factor(wave) +as.factor(pidp), 
-               data=subset_data,vcov = ~psu, weights = subset_data$mean_i_indscub_lw1)
-summary(model)
-
-## time lagged gentrification for composite gentrification index
+# lead
 
 merged_filtered <- merged_filtered %>%
   arrange(pidp, wave) %>%  
   group_by(pidp) %>%
-  mutate(placebo.future = lag(lag_data, 1)) 
+  mutate(lead_m = lead(lag_m_data, 1)) 
 
-# this shifts gentrification values ahead one period due to the nature of the dataframe
+merged_filtered$longxlead_m <- merged_filtered$lead_m*merged_filtered$residency
+merged_filtered$time_treat_lead_m <- merged_filtered$lead_m*merged_filtered$wave
 
-merged_filtered$longxplacebo1 <- merged_filtered$placebo.future*merged_filtered$longstanding
-merged_filtered$time_treat_placebo1 <- merged_filtered$placebo.future*merged_filtered$wave
+# simple model
 
-model <- feols(voteintent ~  placebo.future + longxplacebo1 + time_treat_placebo1 +
-                 dvage + eqhhnet + ownership + as.factor(hiqual_dv) + 
-                 as.factor(jbstat) + fimnsben_dv | as.factor(wave) + 
-                 as.factor(pidp), 
+model <- feols(voteintent ~ longxlead_m + lead_m + time_treat_lead_m | as.factor(wave) + as.factor(pidp),
                data=merged_filtered,vcov = ~psu, weights = merged_filtered$mean_i_indscub_lw1)
-
 summary(model)
+
+model1 <- feols(voteintent ~ longxlead_m + lead_m + time_treat_lead_m +
+                  eqhhmnnet + dvage + as.factor(hiqual_dv) + as.factor(jbstat) +
+                  ownership + fimnsben_dv  | as.factor(wave) + as.factor(pidp),
+                data=merged_filtered,vcov = ~psu, weights = merged_filtered$mean_i_indscub_lw1)
+summary(model1)
+
+
 
 #####
 
 # placebo excluding influential outliers for within-wave specification
 model <- feols(voteintent ~  lag_m_data + longxlag_m + time_treat_lag_m  + 
-                 eqhhnet + dvage + as.factor(jbstat) + as.factor(hiqual_dv) +
+                 eqhhmnnet + dvage + as.factor(jbstat) + as.factor(hiqual_dv) +
                  fimnsben_dv + ownership
                | as.factor(wave) +as.factor(pidp), 
                data=merged_filtered, vcov = ~psu, weights = merged_filtered$mean_i_indscub_lw1)
 
-std_residuals <- residuals(model)
+std_residuals <- residuals(model)/sd(residuals(model))
 plot(std_residuals, type = "h", main = "Standardized Residuals", xlab = "Observation Index", ylab = "Standardized Residuals")
-threshold <- 0.5
+threshold <- 3
 outliers <- which(abs(std_residuals) > threshold)
-clean_data <- subset_data[-outliers, ]
+clean_data <- merged_filtered[-outliers, ]
 clean_model <- feols(voteintent ~ lag_m_data + longxlag_m + time_treat_lag_m + dvage + 
-                       eqhhnet + as.factor(hiqual_dv) + as.factor(jbstat) +
+                       eqhhmnnet + as.factor(hiqual_dv) + as.factor(jbstat) +
                        ownership + fimnsben_dv
                      | as.factor(wave) + as.factor(pidp), 
                      data = clean_data, vcov = ~psu, weights = clean_data$mean_i_indscub_lw1)
@@ -1326,13 +1232,13 @@ summary(clean_model)
 merged_filtered <- merged_filtered %>%
   arrange(pidp, wave) %>%  
   group_by(pidp) %>%
-  mutate(placebo_m = lead(lag_m_data, 1)) 
+  mutate(placebo_m = lag(lag_m_data, 1)) 
 
-merged_filtered$longxplacebo_m <- merged_filtered$placebo_m*merged_filtered$longstanding
+merged_filtered$longxplacebo_m <- merged_filtered$placebo_m*merged_filtered$residency
 merged_filtered$time_treat_placebo_m <- merged_filtered$placebo_m*merged_filtered$wave
 
 model <- feols(voteintent ~ placebo_m + longxplacebo_m  + time_treat_placebo_m +
-                 eqhhnet + dvage + as.factor(hiqual_dv) + as.factor(jbstat) +
+                 eqhhmnnet + dvage + as.factor(hiqual_dv) + as.factor(jbstat) +
                  ownership + fimnsben_dv
                | as.factor(wave) + as.factor(pidp), 
                data=merged_filtered,vcov = ~psu, weights = merged_filtered$mean_i_indscub_lw1)
@@ -1343,14 +1249,32 @@ summary(model)
 
 # excluding outliers for within wave future spec
 
-std_residuals <- residuals(model)
+merged_filtered <- merged_filtered %>%
+  arrange(pidp, wave) %>%  
+  group_by(pidp) %>%
+  mutate(placebo_m = lead(lag_m_data, 1)) 
 
-plot(std_residuals, type = "h", main = "Standardized Residuals", xlab = "Observation Index", ylab = "Standardized Residuals")
+merged_filtered$longxplacebo_m <- merged_filtered$placebo_m*merged_filtered$residency
+merged_filtered$time_treat_placebo_m <- merged_filtered$placebo_m*merged_filtered$wave
+
+model <- feols(voteintent ~ placebo_m + longxplacebo_m + time_treat_placebo_m +
+                 eqhhmnnet + dvage + as.factor(hiqual_dv) + as.factor(jbstat) +
+                 ownership + fimnsben_dv| as.factor(wave) + as.factor(pidp), 
+               data=merged_filtered,vcov = ~psu, weights = merged_filtered$mean_i_indscub_lw1)
+
+summary(model)
+
+
+std_residuals <- residuals(model)/sd(residuals(model))
 threshold <- 3
 outliers <- which(abs(std_residuals) > threshold)
+
+##std_residuals <- residuals(model) / sd(residuals(model))
+#outliers <- which(abs(std_residuals) > 3)
+
 clean_data <- merged_filtered[-outliers, ]
 clean_model <- feols(voteintent ~ placebo_m + longxplacebo_m + time_treat_placebo_m +
-                       eqhhnet + dvage + as.factor(hiqual_dv) + as.factor(jbstat) +
+                       eqhhmnnet + dvage + as.factor(hiqual_dv) + as.factor(jbstat) +
                        ownership + fimnsben_dv
                      | as.factor(wave) + as.factor(pidp), 
                      data = clean_data, vcov = ~psu, weights = clean_data$mean_i_indscub_lw1)
@@ -1368,7 +1292,7 @@ subset_data <- merged_filtered %>%
   filter(pidp %in% complete_pidps)
 
 model <- feols(voteintent ~ placebo_m + longxplacebo_m + time_treat_placebo_m +
-                 eqhhnet + dvage + as.factor(hiqual_dv) + as.factor(jbstat) +
+                 eqhhmnnet + dvage + as.factor(hiqual_dv) + as.factor(jbstat) +
                  ownership + fimnsben_dv | as.factor(wave) + 
                  as.factor(pidp), 
                data=subset_data,vcov = ~psu, weights = subset_data$mean_i_indscub_lw1)
@@ -1377,143 +1301,43 @@ summary(model)
 
 
 # random spatial placebo where random sample is across all 4835 LSOAs in each wave
-set.seed(50) 
+set.seed(123) 
 
-# generate random samples from the specified columns
-generate_samples <- function(num_samples) {
-  all_samples <- c(g$Lag_wave3_m, g$Lag_wave6_m, g$Lag_wave9_m)
-  random_samples <- sample(all_samples, size = num_samples, replace = TRUE)
-  return(random_samples)
-}
-# creating random spatial placebo variables from samples
-randomised_lag_data <- generate_samples(nrow(merged_filtered))
-merged_filtered$randomised_lag_data <- randomised_lag_data
+all_samples <- c(g$Lag_wave3_m, g$Lag_wave6_m, g$Lag_wave9_m)
 
-merged_filtered <- merged_filtered %>%
-  mutate(longxrandom = randomised_lag_data * longstanding,
-         time_treat_random = randomised_lag_data * wave)
+placebo_effects <- replicate(1000, {
+  merged_filtered$randomised_lag_data <- sample(all_samples, nrow(merged_filtered), replace = TRUE)
+  merged_filtered$longxrandom <- merged_filtered$randomised_lag_data * merged_filtered$residency
+  merged_filtered$time_treat_random <- merged_filtered$randomised_lag_data * merged_filtered$wave
+  
+  placebo_model <- feols(voteintent ~ randomised_lag_data + longxrandom + time_treat_random +
+                           eqhhmnnet + dvage + as.factor(hiqual_dv) + as.factor(jbstat) +
+                           ownership + fimnsben_dv | as.factor(wave) + as.factor(pidp), 
+                         data = merged_filtered, vcov = ~psu, weights = merged_filtered$mean_i_indscub_lw1)
+  
+  coef(placebo_model)["longxrandom"]
+})
 
-model <- feols(voteintent ~ randomised_lag_data + dvage + longxrandom + time_treat_random +
-                 eqhhnet + as.factor(hiqual_dv) +
-                 ownership + as.factor(jbstat) + fimnsben_dv | as.factor(wave) + as.factor(pidp), 
-               data = merged_filtered, vcov = ~psu, weights = merged_filtered$mean_i_indscub_lw1)
-
-summary(model)
-
+real_model <- feols(voteintent ~ longxlead_m + lead_m + time_treat_lead_m +
+                      eqhhmnnet + dvage + as.factor(hiqual_dv) + as.factor(jbstat) +
+                      ownership + fimnsben_dv | as.factor(wave) + as.factor(pidp), 
+                    data = merged_filtered, vcov = ~psu, weights = merged_filtered$mean_i_indscub_lw1)
 
 
+real_coef <- coef(real_model)["longxlead_m"]
 
-# cumulative gentrification excluding outliers
+p_val_two_sided <- mean(abs(placebo_effects) >= abs(real_coef))
+p_val_one_sided <- mean(placebo_effects <= real_coef)
+cat("Real Coefficient:", round(real_coef, 3), "\n")
+# coefficient of -1.153
+cat("Two-sided p-value:", round(p_val_two_sided, 4), "\n")
+# Two-sided p-value: 0 
+cat("One-sided p-value:", round(p_val_one_sided, 4), "\n")
+# One-sided p-value: 0
 
-# placebo excluding influential outliers for within-wave specification
-model <- feols(voteintent ~  lag_data + longxlag + time_treat_lag  + 
-                 eqhhnet + dvage + as.factor(jbstat) + as.factor(hiqual_dv) +
-                 fimnsben_dv + ownership
-               | as.factor(wave) +as.factor(pidp), 
-               data=merged_filtered, vcov = ~psu, weights = merged_filtered$mean_i_indscub_lw1)
+# out of 1,000 placebo simulation, none produce a coefficient as extreme (in magnitude)
+# as the real estimate
 
-# plotting residuals
-std_residuals <- residuals(model)
-plot(std_residuals, type = "h", main = "Standardized Residuals", xlab = "Observation Index", ylab = "Standardized Residuals")
-
-# setting residual threshold
-
-threshold <- 3
-outliers <- which(abs(std_residuals) > threshold)
-clean_data <- subset_data[-outliers, ]
-clean_model <- feols(voteintent ~ lag_m_data + longxlag_m + time_treat_lag_m + dvage + 
-                       eqhhnet + as.factor(hiqual_dv) + as.factor(jbstat) +
-                       ownership + fimnsben_dv
-                     | as.factor(wave) + as.factor(pidp), 
-                     data = clean_data, vcov = ~psu, weights = clean_data$mean_i_indscub_lw1)
-
-summary(clean_model)
-
-
-
-#conducting a past placebo test with a time-lagged variable (i.e. treatment for waves 6 and 9 is lagged
-# to waves 3 and 6 instead)
-
-merged_filtered <- merged_filtered %>%
-  arrange(pidp, wave) %>%  
-  group_by(pidp) %>%
-  mutate(placebo = lead(lag_data, 1)) 
-
-merged_filtered$longxplacebo <- merged_filtered$placebo*merged_filtered$longstanding
-merged_filtered$time_treat_placebo <- merged_filtered$placebo*merged_filtered$wave
-
-
-model <- feols(voteintent ~ placebo + longxplacebo + time_treat_placebo +
-                 dvage + eqhhnet + ownership + as.factor(hiqual_dv) + 
-                 as.factor(jbstat) + fimnsben_dv| as.factor(wave) + as.factor(pidp), 
-               data=merged_filtered,vcov = ~psu, weights = merged_filtered$mean_i_indscub_lw1)
-
-summary(model)
-
-
-
-# residual test for future placebo cumulative spec
-
-std_residuals <- residuals(model)
-plot(std_residuals, type = "h", main = "Standardized Residuals", xlab = "Observation Index", ylab = "Standardized Residuals")
-
-# setting residuals
-threshold <- 0.1
-outliers <- which(abs(std_residuals) > threshold)
-clean_data <- merged_filtered[-outliers, ]
-clean_model <- feols(voteintent ~ placebo.future + longxplacebo1 + time_treat_placebo1 +
-                       dvage + eqhhnet + ownership + as.factor(hiqual_dv) + 
-                       as.factor(jbstat) + fimnsben_dv
-                     | as.factor(wave) + as.factor(pidp), 
-                     data = clean_data, vcov = ~psu, weights = clean_data$mean_i_indscub_lw1)
-summary(clean_model)
-
-
-# testing time lag with balanced panel
-
-complete_pidps <- merged_filtered %>%
-  group_by(pidp) %>%
-  summarise(all_waves_present = all(unique(merged_filtered$wave) %in% wave)) %>%
-  filter(all_waves_present) %>%
-  pull(pidp)  
-
-subset_data <- merged_filtered %>%
-  filter(pidp %in% complete_pidps)
-
-model <- feols(voteintent ~ placebo.future + longxplacebo1 + time_treat_placebo1 +
-                 dvage + eqhhnet + ownership + as.factor(hiqual_dv) + 
-                 as.factor(jbstat) + fimnsben_dv | as.factor(wave) + 
-                 as.factor(pidp), 
-               data=subset_data,vcov = ~psu, weights = subset_data$mean_i_indscub_lw1)
-
-summary(model)
-
-# testing future placebo with random spatial lag
-
-set.seed(50) 
-
-# generate random samples from the specified columns
-generate_samples <- function(num_samples) {
-  all_samples <- c(g$Lag_wave3, g$Lag_wave6, g$Lag_wave9)
-  random_samples <- sample(all_samples, size = num_samples, replace = TRUE)
-  return(random_samples)
-}
-# creating random spatial placebo variables from samples
-randomised_lag_data <- generate_samples(nrow(merged_filtered))
-merged_filtered$randomised_lag_data <- randomised_lag_data
-
-merged_filtered <- merged_filtered %>%
-  mutate(longxrandom = randomised_lag_data * longstanding,
-         time_treat_random = randomised_lag_data * wave)
-
-model <- feols(voteintent ~ randomised_lag_data + dvage + longxrandom + time_treat_random +
-                 eqhhnet + as.factor(hiqual_dv) +
-                 ownership + as.factor(jbstat) + fimnsben_dv | as.factor(wave) + as.factor(pidp), 
-               data = merged_filtered, vcov = ~psu, weights = merged_filtered$mean_i_indscub_lw1)
-
-summary(model)
-
-# random spatial placebo across composite function
 
 #####
 
@@ -1521,7 +1345,7 @@ summary(model)
 
 # analyse the LSOA's included in the analysis
 
-subset_mf <- merged_filtered[!is.na(merged_filtered$voteintent) & !is.na(merged_filtered$eqhhnet),]
+subset_mf <- merged_filtered[!is.na(merged_filtered$voteintent) & !is.na(merged_filtered$eqhhmnnet),]
 
 # proportion of wave 3 respondents that last until wave 9
 
@@ -1671,8 +1495,8 @@ dev.off()
 
 summary_authority <- subset_mf %>%
   group_by(Local.authority.name, wave) %>%
-  summarise(count = n(),# Assumes local.authority.name is consistent within each lsoa11
-            .groups = 'drop'  # This option drops the grouping, so summary_mf is no longer grouped
+  summarise(count = n(),
+            .groups = 'drop'  
   )
 
 mean(summary_mf$gentrification)
@@ -1711,10 +1535,22 @@ print(least_common_value)
 
 wide_data <- pivot_wider(
   data = summary_authority, 
-  names_from = wave,   # Column that will turn into new header names
-  values_from = count  # Column that contains the values for the new columns
+  names_from = wave,   
+  values_from = count 
 )
 
 write.csv(wide_data, file = "response over waves and boroughs.csv", row.names = FALSE)
+
+
+# checking if how many values from merged_filtered are taken from LSOAs with imputed gentrification values
+
+any(lsoa_with_missing %in% merged_filtered$lsoa11)
+intersect(lsoa_with_missing, merged_filtered$lsoa11)
+length(intersect(lsoa_with_missing, merged_filtered$lsoa11))
+
+# 280 matches
+
+
+
 
 
